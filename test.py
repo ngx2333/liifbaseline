@@ -65,7 +65,7 @@ def eval_psnr(loader, model, data_norm=None, eval_type=None, eval_bsize=None,
         inp = (batch['inp'] - inp_sub) / inp_div
         if eval_bsize is None:
             with torch.no_grad():
-                pred = model(inp, batch['coord'], batch['cell'])
+                pred,_ = model(inp, batch['coord'], batch['cell'])
         else:
             pred = batched_predict(model, inp,
                 batch['coord'], batch['cell'], eval_bsize)

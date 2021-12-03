@@ -23,7 +23,7 @@ class LIIF(nn.Module):
             imnet_in_dim = self.encoder.out_dim
             if self.feat_unfold:
                 imnet_in_dim *= 9
-            imnet_in_dim += 2 # attach coord
+            imnet_in_dim += 2  # attach coord
             if self.cell_decode:
                 imnet_in_dim += 2
             self.imnet = models.make(imnet_spec, args={'in_dim': imnet_in_dim})
@@ -31,15 +31,15 @@ class LIIF(nn.Module):
             self.imnet = None
 
     def gen_feat(self, inp):
-        self.feat = self.encoder(inp)
-        return self.feat
+        self.feat, self.edge = self.encoder(inp)
+        return self.feat, self.edge
 
     def query_rgb(self, coord, cell=None):
         feat = self.feat
 
         if self.imnet is None:
             ret = F.grid_sample(feat, coord.flip(-1).unsqueeze(1),
-                mode='nearest', align_corners=False)[:, :, 0, :] \
+                                mode='nearest', align_corners=False)[:, :, 0, :] \
                 .permute(0, 2, 1)
             return ret
 
@@ -98,8 +98,12 @@ class LIIF(nn.Module):
 
         tot_area = torch.stack(areas).sum(dim=0)
         if self.local_ensemble:
-            t = areas[0]; areas[0] = areas[3]; areas[3] = t
-            t = areas[1]; areas[1] = areas[2]; areas[2] = t
+            t = areas[0]
+            areas[0] = areas[3]
+            areas[3] = t
+            t = areas[1]
+            areas[1] = areas[2]
+            areas[2] = t
         ret = 0
         for pred, area in zip(preds, areas):
             ret = ret + pred * (area / tot_area).unsqueeze(-1)
@@ -107,4 +111,4 @@ class LIIF(nn.Module):
 
     def forward(self, inp, coord, cell):
         self.gen_feat(inp)
-        return self.query_rgb(coord, cell)
+        return self.query_rgb(coord, cell), self.edge

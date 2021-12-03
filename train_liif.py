@@ -37,6 +37,25 @@ import utils
 from test import eval_psnr
 
 
+def cross_entropy_loss_RCF(prediction, label):
+    label = label.long()
+    mask = label.float()
+    num_positive = torch.sum((mask == 1).float()).float()
+    num_negative = torch.sum((mask == 0).float()).float()
+
+    mask[mask == 1] = 1.0 * num_negative / (num_positive + num_negative)
+    mask[mask == 0] = 1.1 * num_positive / (num_positive + num_negative)
+    mask[mask == 2] = 0
+
+    # print('num pos', num_positive)
+    # print('num neg', num_negative)
+    # print(1.0 * num_negative / (num_positive + num_negative), 1.1 * num_positive / (num_positive + num_negative))
+
+    cost = torch.nn.functional.binary_cross_entropy(
+        prediction.float(), label.float(), weight=mask, reduce=False)
+    return torch.sum(cost) / (num_negative + num_positive)
+
+
 def make_data_loader(spec, tag=''):
     if spec is None:
         return None
@@ -49,7 +68,7 @@ def make_data_loader(spec, tag=''):
         log('  {}: shape={}'.format(k, tuple(v.shape)))
 
     loader = DataLoader(dataset, batch_size=spec['batch_size'],
-        shuffle=(tag == 'train'), num_workers=8, pin_memory=True)
+                        shuffle=(tag == 'train'), num_workers=8, pin_memory=True)
     return loader
 
 
@@ -89,7 +108,8 @@ def prepare_training():
 def train(train_loader, model, optimizer):
     model.train()
     loss_fn = nn.L1Loss()
-    train_loss = utils.Averager()
+    train_sr_loss = utils.Averager()
+    train_edge_loss = utils.Averager()
 
     data_norm = config['data_norm']
     t = data_norm['inp']
@@ -104,20 +124,32 @@ def train(train_loader, model, optimizer):
             batch[k] = v.cuda()
 
         inp = (batch['inp'] - inp_sub) / inp_div
-        pred = model(inp, batch['coord'], batch['cell'])
+        edge_gt = batch['edge']
+
+        pred, edge_pred = model(inp, batch['coord'], batch['cell'])
 
         gt = (batch['gt'] - gt_sub) / gt_div
+        # print(edge_gt.shape,edge_pred.shape)
+        # exit(0)
         loss = loss_fn(pred, gt)
+        edge_loss = cross_entropy_loss_RCF(edge_pred, edge_gt)
 
-        train_loss.add(loss.item())
+        # loss.backward()
+        # loss.backward()
+        all_loss = loss+edge_loss
+
+        train_sr_loss.add(loss.item())
+        train_edge_loss.add(edge_loss.item())
 
         optimizer.zero_grad()
-        loss.backward()
+        all_loss.backward()
         optimizer.step()
 
-        pred = None; loss = None
+        pred = None
+        loss = None
+        edge_loss = None
 
-    return train_loss.item()
+    return train_sr_loss.item(), train_edge_loss.item()
 
 
 def main(config_, save_path):
@@ -153,12 +185,14 @@ def main(config_, save_path):
 
         writer.add_scalar('lr', optimizer.param_groups[0]['lr'], epoch)
 
-        train_loss = train(train_loader, model, optimizer)
+        train_sr_loss, train_edge_loss = train(train_loader, model, optimizer)
         if lr_scheduler is not None:
             lr_scheduler.step()
 
-        log_info.append('train: loss={:.4f}'.format(train_loss))
-        writer.add_scalars('loss', {'train': train_loss}, epoch)
+        log_info.append('train: sr_loss={:.4f}  edge_loss={:.4f}'.format(
+            train_sr_loss, train_edge_loss))
+        writer.add_scalars(
+            'loss', {'train_sr': train_sr_loss, 'train_edge': train_edge_loss}, epoch)
 
         if n_gpus > 1:
             model_ = model.module
@@ -178,7 +212,7 @@ def main(config_, save_path):
 
         if (epoch_save is not None) and (epoch % epoch_save == 0):
             torch.save(sv_file,
-                os.path.join(save_path, 'epoch-{}.pth'.format(epoch)))
+                       os.path.join(save_path, 'epoch-{}.pth'.format(epoch)))
 
         if (epoch_val is not None) and (epoch % epoch_val == 0):
             if n_gpus > 1 and (config.get('eval_bsize') is not None):
@@ -186,9 +220,9 @@ def main(config_, save_path):
             else:
                 model_ = model
             val_res = eval_psnr(val_loader, model_,
-                data_norm=config['data_norm'],
-                eval_type=config.get('eval_type'),
-                eval_bsize=config.get('eval_bsize'))
+                                data_norm=config['data_norm'],
+                                eval_type=config.get('eval_type'),
+                                eval_bsize=config.get('eval_bsize'))
 
             log_info.append('val: psnr={:.4f}'.format(val_res))
             writer.add_scalars('psnr', {'val': val_res}, epoch)

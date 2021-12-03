@@ -11,6 +11,7 @@ from torchvision import transforms
 
 from datasets import register
 
+import cv2
 
 @register('image-folder')
 class ImageFolder(Dataset):
@@ -29,6 +30,7 @@ class ImageFolder(Dataset):
             filenames = filenames[:first_k]
 
         self.files = []
+        self.gtfiles = []
         for filename in filenames:
             file = os.path.join(root_path, filename)
 
@@ -50,14 +52,16 @@ class ImageFolder(Dataset):
                 self.files.append(bin_file)
 
             elif cache == 'in_memory':
-                self.files.append(transforms.ToTensor()(
-                    Image.open(file).convert('RGB')))
+                self.files.append(transforms.ToTensor()(Image.open(file).convert('RGB')))
+                gtfile=file.replace('div2k','div2kEdge')
+                self.gtfiles.append(transforms.ToTensor()(np.array(Image.open(gtfile), dtype=np.float32)))
 
     def __len__(self):
         return len(self.files) * self.repeat
 
     def __getitem__(self, idx):
         x = self.files[idx % len(self.files)]
+        edge_gt = self.gtfiles[idx % len(self.gtfiles)]
 
         if self.cache == 'none':
             return transforms.ToTensor()(Image.open(x).convert('RGB'))
@@ -70,7 +74,7 @@ class ImageFolder(Dataset):
             return x
 
         elif self.cache == 'in_memory':
-            return x
+            return x, edge_gt
 
 
 @register('paired-image-folders')
